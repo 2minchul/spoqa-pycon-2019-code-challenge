@@ -2,6 +2,18 @@
 
 안녕하세요. 스포카 코드 챌린지 2019 에 참여해주셔서 감사합니다. 스포카 코드 챌린지 2019는 주식회사 스포카에서 [파이콘 행사][0]를 맞아 파이썬 개발자 여러분을 위해 준비한 이벤트입니다.
 
+## HOW TO RUN
+
+![](https://i.imgur.com/IJvbMtw.png)
+
+`CONNECT THE PYTHONISTAS` 를 잇는 간단한 퍼즐 게임 입니다.
+
+```bash
+pip install -r requirements.txt
+```
+후에 
+`main.py` 를 실행합니다.
+
 ## 주제
 
 ### `CONNECT THE PYTHONISTAS` 라는 문구가 담긴 결과물
