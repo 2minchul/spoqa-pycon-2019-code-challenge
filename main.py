@@ -1,57 +1,12 @@
-import itertools
 import random
 import sys
+from itertools import chain, cycle
+from typing import Tuple, Generator, Iterable, Optional, List
 
 import pygame
 
-SCREEN_WIDTH = 906
-SCREEN_HEIGHT = 450
-
 white = (255, 255, 255)
 black = (0, 0, 0)
-
-pygame.init()
-pygame.display.set_caption("CONNECT THE PYTHONISTAS")
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-clock = pygame.time.Clock()
-
-
-def crop_image(image: pygame.Surface, x, y, size):
-    cropped = pygame.Surface(size)
-    cropped.blit(image, (0, 0), (x, y, size[0], size[1]))
-    return cropped
-
-
-class ImageObject:
-    x = y = 0
-    image: pygame.Surface
-
-    def draw(self):
-        screen.blit(self.image, (self.x, self.y))
-
-    def get_position(self):
-        return self.x, self.y
-
-
-class PuzzleImage(ImageObject):
-    def __init__(self, path):
-        self.image: pygame.Surface = pygame.image.load(path).convert_alpha()
-
-
-class PuzzlePiece(ImageObject):
-    def __init__(self, image, x, y):
-        self.x = self.origin_x = x
-        self.y = self.origin_y = y
-        self.image = image
-        self.width, self.height = self.image.get_size()
-
-    def draw_rect(self, border=1):
-        pygame.draw.rect(screen, black, [self.x, self.y, *self.image.get_size()], border)
-
-    def is_hit(self, position):
-        if self.x <= position[0] < self.x + self.width and self.y <= position[1] < self.y + self.height:
-            return True
-        return False
 
 
 def chunks(l, n):
@@ -60,58 +15,112 @@ def chunks(l, n):
         yield l[i:i + n]
 
 
-class PieceArray:
-    array: list
-    size: int
+class ImageObject:
+    x = y = 0
+    image: pygame.Surface
+    parent: Optional[pygame.Surface]
 
-    def __init__(self, pieces, pieces_size, background_size, line_limit=3):
+    def get_position(self):
+        return self.x, self.y
+
+    def draw(self):
+        if self.parent:
+            self.parent.blit(self.image, self.get_position())
+
+
+class PuzzleImage(ImageObject):
+    def __init__(self, path, parent=None):
+        self.image: pygame.Surface = pygame.image.load(path).convert_alpha()
+        self.parent = parent
+
+
+Size = Tuple[int, int]  # width, height
+Position = Tuple[int, int]  # x, y
+
+
+class PuzzlePiece(ImageObject):
+    def __init__(self, image: pygame.Surface, x: int, y: int, parent: Optional[pygame.Surface] = None):
+        self.x = self.origin_x = x
+        self.y = self.origin_y = y
+        self.image = image
+        self.width, self.height = self.image.get_size()
+        self.parent = parent
+
+    def draw_rect(self, border: int = 1):
+        if self.parent:
+            pygame.draw.rect(self.parent, black, [self.x, self.y, *self.image.get_size()], border)
+
+    def is_hit(self, position: Position):
+        if self.x <= position[0] < self.x + self.width and self.y <= position[1] < self.y + self.height:
+            return True
+        return False
+
+
+PieceArrayIndex = Tuple[int, int]  # i, j
+PieceArrayIterItem = Tuple[PieceArrayIndex, PuzzlePiece]
+PieceOrNone = Optional[PuzzlePiece]
+
+
+def crop_image(image: pygame.Surface, position: Position, size: Size):
+    cropped = pygame.Surface(size)
+    cropped.blit(image, (0, 0), (*position, *size))
+    return cropped
+
+
+class PieceArray:
+    array: List[List[PieceOrNone]]
+    pieces_size: Size
+    background_size: Size
+    puzzle_length: int
+
+    def __init__(self, pieces: List[PieceOrNone], pieces_size: Size, background_size: Size, puzzle_length: int = 3):
         self.pieces_size = pieces_size
         self.background_size = background_size
-        self.size = line_limit
-        self.array = [i for i in chunks(pieces, self.size)]  # 3x3 리스트로 reshape
+        self.puzzle_length = puzzle_length
+        self.array = [i for i in chunks(pieces, self.puzzle_length)]  # 3x3 리스트로 reshape
 
-    def loop(self):
-        for i, _line in enumerate(self.array):
-            for j, piece in enumerate(_line):
-                if piece:
+    def loop(self) -> Generator[PieceArrayIterItem, None, None]:
+        for i, pieces in enumerate(self.array):
+            for j, piece in enumerate(pieces):
+                if piece:  # None 은 건너뛰기
                     yield (i, j), piece
 
-    def flatten_array(self):
-        return itertools.chain(*self.array)
+    def flatten_array(self) -> Iterable[PieceOrNone]:
+        return chain(*self.array)
 
-    def find_hit(self, position):
+    def find_hit(self, position: Position) -> Optional[PieceArrayIndex]:
         for index, piece in self.loop():
             if piece.is_hit(position):
                 return index
 
-    def get(self, i, j):
+        return None
+
+    def get(self, i: int, j: int) -> PuzzlePiece:
         return self.array[i][j]
 
-    def exchange(self, index_a, index_b):
+    def exchange(self, index_a: PieceArrayIndex, index_b: PieceArrayIndex):
         a_i, a_j = index_a
         b_i, b_j = index_b
-        x, y = a_i * 3 + a_j, b_i * 3 + b_j
         self.array[a_i][a_j], self.array[b_i][b_j] = self.array[b_i][b_j], self.array[a_i][a_j]
-        # self.pieces[x], self.pieces[y] = self.pieces[y], self.pieces[x]
 
-    def slide(self, i, j):
-        _max = self.size - 1
+    def slide(self, index: PieceArrayIndex):
+        i, j = index
 
-        def up_and_down(index):
-            if 0 < index:
-                yield index - 1
-            if index + 1 < self.size:
-                yield index + 1
+        def up_and_down(n: int) -> Generator[int, None, None]:
+            _max = self.puzzle_length - 1
+            if 0 < n:
+                yield n - 1
+            if n < _max:
+                yield n + 1
 
-        for _i in up_and_down(i):
-            if self.array[_i][j] is None:
-                self.exchange([i, j], [_i, j])
-                return
+        # for each (i+-1, j) and (i, j+-1)
+        for _index in chain(zip(up_and_down(i), cycle([j])),
+                            zip(cycle([i]), up_and_down(j))):  # type: PieceArrayIndex
+            if self.get(*_index) is None:
+                self.exchange(index, _index)
+                break
 
-        for _j in up_and_down(j):
-            if self.array[i][_j] is None:
-                self.exchange([i, j], [i, _j])
-                return
+        self.reposition()
 
     def draw(self):
         for _, piece in self.loop():
@@ -119,42 +128,48 @@ class PieceArray:
             piece.draw_rect()
 
     def reposition(self):
-        def xy_iter():
+        def position_iter() -> Generator[Position, None, None]:
             for y in range(0, self.background_size[1], self.pieces_size[1]):
                 for x in range(0, self.background_size[0], self.pieces_size[0]):
                     yield x, y
 
-        for piece, position in zip(self.flatten_array(), xy_iter()):
-            if not piece:
+        for piece, position in zip(self.flatten_array(), position_iter()):
+            if piece is None:
                 continue
             piece.x, piece.y = position
 
     def is_finish(self):
-        for _, piece in self.loop():  # type: PuzzlePiece
+        for _, piece in self.loop():
             if piece.origin_x != piece.x or piece.origin_y != piece.y:
                 return False
         return True
 
 
-def main():
-    background = PuzzleImage('resource/bg.png')
-    background_size = background.image.get_size()
-    piece_size = [n // 3 for n in background_size]
+def main(background_image_path='resource/bg.png'):
+    puzzle_length = 3  # n x n 퍼즐
+    background_size: Size = pygame.image.load(background_image_path).get_size()
+    piece_size: Size = (background_size[0] // puzzle_length, background_size[1] // puzzle_length)
+
+    pygame.init()
+    pygame.display.set_caption("CONNECT THE PYTHONISTAS")
+    screen = pygame.display.set_mode(background_size)
+    background = PuzzleImage(background_image_path, parent=screen)
+
+    clock = pygame.time.Clock()
 
     pieces = []
     for y in range(0, background_size[1], piece_size[1]):
         for x in range(0, background_size[0], piece_size[0]):
-            pieces.append(PuzzlePiece(crop_image(background.image, x, y, piece_size), x, y))
+            pieces.append(
+                PuzzlePiece(crop_image(background.image, (x, y), piece_size), x, y, parent=screen)
+            )
 
     del pieces[2]  # 3번째 조각 삭제
     random.shuffle(pieces)
     pieces.insert(2, None)  # 3번째 조각 None 으로 대체
 
-    piece_array = PieceArray(pieces, piece_size, background_size)
+    piece_array = PieceArray(pieces, piece_size, background_size, puzzle_length)
     piece_array.reposition()
-
-    # print(type(screen))
-    # pieces.append(PuzzlePiece(crop_image(background.image, 0, 0, piece_size), 0, 0))
 
     def draw(success=False):
         screen.fill(white)
@@ -164,18 +179,18 @@ def main():
             background.draw()
 
     is_success = False
-    while True:
+    while True:  # main loop
         clock.tick(60)
-        for event in pygame.event.get():
+        for event in pygame.event.get():  # event loop (run forever)
             if event.type == pygame.QUIT:
                 sys.exit()
 
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == pygame.BUTTON_LEFT:
-                mouse_pos = pygame.mouse.get_pos()
-                index = piece_array.find_hit(mouse_pos)
+            if not is_success and event.type == pygame.MOUSEBUTTONDOWN and event.button == pygame.BUTTON_LEFT:
+                # 왼쪽 마우스 클릭 이벤트
+                mouse_position = pygame.mouse.get_pos()
+                index = piece_array.find_hit(mouse_position)
                 if index:
-                    piece_array.slide(*index)
-                    piece_array.reposition()
+                    piece_array.slide(index)
                     if piece_array.is_finish():
                         is_success = True
 
